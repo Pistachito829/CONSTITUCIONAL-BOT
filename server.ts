@@ -745,9 +745,11 @@ app.delete("/api/cases/:id", async (req, res) => {
     // Delete chunks (optional cleanup)
     const chunksRef = db.collection("cases").doc(caseId).collection("chunks");
     const chunks = await chunksRef.get();
-    const batch = db.batch();
-    chunks.docs.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
+    if (!chunks.empty) {
+      const batch = db.batch();
+      chunks.docs.forEach(doc => batch.delete(doc.ref));
+      await batch.commit();
+    }
     res.json({ status: "ok" });
   } catch (error) {
     res.status(500).json({ error: "Error deleting case" });

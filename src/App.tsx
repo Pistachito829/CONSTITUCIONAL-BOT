@@ -297,7 +297,7 @@ const Dashboard = () => {
                     </p>
                   </div>
                   <button 
-                    onClick={() => navigate(`/chat/${item.id}`, { state: { title: item.title, year: item.year, tag: item.tag, description: item.description || item.desc } })}
+                    onClick={() => navigate(`/chat/${encodeURIComponent(item.id)}`, { state: { title: item.title, year: item.year, tag: item.tag, description: item.description || item.desc } })}
                     className="self-start bg-primary text-white text-xs font-bold px-8 py-4 uppercase tracking-widest hover:opacity-90 transition-all flex items-center gap-2 group-btn relative z-10"
                   >
                     Analizar Fallo
@@ -393,7 +393,7 @@ const ChatCase = () => {
   useEffect(() => {
     if (!caseId) return;
 
-    fetch(`/api/cases/${caseId}`)
+    fetch(`/api/cases/${encodeURIComponent(caseId)}`)
       .then(res => {
         if (!res.ok) throw new Error("Failed to fetch case details");
         return res.json();
@@ -459,7 +459,7 @@ const ChatCase = () => {
     if (!caseId || !user) return;
     const interval = setInterval(async () => {
       try {
-        const res = await fetch(`/api/chat/poll?caseId=${caseId}&studentName=${encodeURIComponent(userData?.name || "Estudiante")}`);
+        const res = await fetch(`/api/chat/poll?caseId=${encodeURIComponent(caseId)}&studentName=${encodeURIComponent(userData?.name || "Estudiante")}`);
         if (!res.ok) return;
         const data = await res.json();
         if (data.teacherMessages && data.teacherMessages.length > 0) {
@@ -1061,9 +1061,10 @@ const TeacherPanel = () => {
     setUploadStatus('uploading');
     const caseIdForUpload = newCase.title.toLowerCase()
       .trim()
-      .replace(/\s+/g, '_')
       .normalize("NFD")
-      .replace(/[\u0300-\u036f]/g, "");
+      .replace(/[\u0300-\u036f]/g, "")
+      .replace(/[^a-z0-9]/g, '_')
+      .replace(/_+/g, '_');
     
     const formData = new FormData();
     formData.append('caseId', caseIdForUpload);
@@ -1140,7 +1141,7 @@ const TeacherPanel = () => {
   const handleDeleteCase = async (id: string) => {
     if (!window.confirm("¿Estás seguro de que quieres eliminar este caso?")) return;
     try {
-      await fetch(`/api/cases/${id}`, { method: 'DELETE' });
+      await fetch(`/api/cases/${encodeURIComponent(id)}`, { method: 'DELETE' });
       setCases(prev => prev.filter(c => c.id !== id));
       fetchInitialData();
     } catch (error) {
