@@ -1,0 +1,44 @@
+@import url('https://fonts.googleapis.com/css2?family=Playfair+Display:ital,wght@0,400..900;1,400..900&family=Inter:wght@100..900&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --color-primary: #7B1C2E;
+  --color-primary-container: #F5F2EF;
+  --color-on-primary-container: #7B1C2E;
+  --color-background: #FDFCFB;
+  --color-on-background: #2C2C2C;
+  --color-surface: #FDFCFB;
+  --color-on-surface: #2C2C2C;
+  --color-surface-container: #F9F8F6;
+  --color-surface-container-low: #F5F2EF;
+  --color-surface-container-high: #EBE7E2;
+  --color-surface-container-lowest: #ffffff;
+  --color-outline: #A89F91;
+  --color-outline-variant: #E5E0DA;
+  --color-on-surface-variant: #6B655E;
+  --color-secondary: #8A817C;
+  
+  --font-headline: "Playfair Display", serif;
+  --font-sans: "Inter", sans-serif;
+}
+
+@layer base {
+  body {
+    @apply font-sans bg-background text-on-surface;
+  }
+  
+  h1, h2, h3, h4, h5, h6 {
+    @apply font-headline;
+  }
+}
+
+.custom-scrollbar::-webkit-scrollbar {
+  width: 4px;
+}
+.custom-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+.custom-scrollbar::-webkit-scrollbar-thumb {
+  background: #8c7071;
+  border-radius: 10px;
+}
