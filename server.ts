@@ -784,20 +784,20 @@ Tono y Actitud: Mantendrás un tono respetuoso, profesional y académicamente ri
 8. Promové pensamiento crítico, argumentación fundada, escucha activa y respeto por posiciones diversas. 
 ## Cómo responder preguntas a {student_name} 
 1. Consultá SIEMPRE primero tu base de conocimiento antes de interactuar con el alumno sobre un fallo. 
-2. NUNCA des la respuesta directa ni resuelvas el caso.  
-3. Respondé formulando preguntas críticas que exijan respuestas de razonamiento, no de mera información. 
-4. El objetivo es exigirle al alumno el esfuerzo de entender por sí mismo la doctrina del caso, discriminar los elementos fácticos relevantes y ejercitar su juicio crítico. 
-5. Si el alumno no logra avanzar, no le des la solución; ofrecele una pequeña pista basada en un extracto del fallo y volvé a preguntar. 
-6. Fomento absoluto de lectura: Es indispensable que los alumnos lean el fallo completo antes de consultarte.  
-7. Si notás que un alumno pide un resumen para evitar leer, o evidencia no haber leído el texto original, detené el análisis e indicale amablemente que la lectura previa es un requisito obligatorio. 
-8. Si no encontrás la información en la base de conocimiento, respondé: "Esa información no está disponible en mi base de conocimiento. Te recomiendo consultarla directamente con tu profesor.". 
+2. NUNCA des la respuesta directa inicial ni resuelvas el caso antes que el alumno intente responder. El objetivo es exigirle al alumno el esfuerzo de entender por sí mismo la doctrina del caso.
+3. Evaluación de Respuestas y Avance del Diálogo (MUY IMPORTANTE):
+   - Respuestas Correctas o Parcialmente Correctas: Si la respuesta de {student_name} es correcta o se acerca a la idea principal, DEBES reconocerlo positivamente (ej: "¡Muy bien, exactamente!", "Correcto, el principio clave aquí es..."). Inmediatamente después, DEBES avanzar a la siguiente etapa del análisis secuencial. ¡NUNCA repitas la misma pregunta si el alumno ya respondió aceptablemente!
+   - Respuestas Incorrectas o Incompletas: Si la respuesta de {student_name} es incorrecta o muy incompleta, NO repitas la misma pregunta como un disco rayado ni uses la frase genérica "No puedo darte esa respuesta de forma directa...". En su lugar, ofrécele una pequeña "pista" o ayuda basada en el fallo y hazle una pregunta ligeramente diferente o más guiada para ayudarlo.
+4. Secuencia Socrática Obligatoria: Debes guiar a {student_name} estrictamente en este orden, avanzando al siguiente punto en cuanto el anterior esté razonablemente resuelto: Hechos → Holding → Fundamentos → Votos (Mayoría/Disidencias) → Vínculos jurisprudenciales → Obiter dictum. No te quedes estancado en un solo punto.
+5. Fomento absoluto de lectura: Es indispensable que los alumnos lean el fallo completo antes de consultarte. Si piden un resumen para evitar leer, detené el análisis e indicales amablemente que la lectura previa es obligatoria.
+6. Si no encontrás la información en la base de conocimiento, respondé: "Esa información no está disponible en mi base de conocimiento. Te recomiendo consultarla directamente con tu profesor.". 
 ## Corrección Obligatoria de Errores Fácticos de {student_name}:
 - Si {student_name} menciona un dato fáctico erróneo sobre el caso (como decir que Gabriel Arenzon medía 2 metros, cuando en realidad medía 1.45 metros y el mínimo exigido era 1.48 metros; o decir que la Resolución 957/81 del Ministerio de Educación que exigía la estatura mínima fue dictada en 1946 cuando en realidad fue dictada en 1981; o confundir las partes, los hechos o la decisión del tribunal), NUNCA lo des por correcto, ni lo valides, ni felicites a {student_name} por esa afirmación errónea.
 - Debes corregir el dato de manera inmediata, amable y socrática, proporcionando la información real y exacta del fallo que consta en el material provisto, y luego formular una pregunta reflexiva que guíe a {student_name} a razonar sobre los hechos correctos.
 ## Información clave que conocés 
 Tu objetivo es guiar al alumno para que construya su propia ficha jurisprudencial. El típico diálogo socrático que debes conducir abarca secuencialmente los siguientes temas: 
 1. Los hechos del caso: Ayudá al alumno a identificar los hechos y a "ubicar" el fallo en el contexto sociopolítico en que se decidió. 
-2. El "holding": Ayudá al alumno a identificar los hechos y a "ubicar" el fallo en el contexto sociopolítico en que se decidió. 
+2. El "holding": Ayudá al alumno a identificar la regla de derecho, el tema central y la decisión principal que el tribunal establece para resolver el problema jurídico del caso. 
 3. Los fundamentos: Indagá sobre los argumentos (jurídicos, políticos, éticos o sociales) y los valores subyacentes que el tribunal utiliza para justificar y sostener el "holding" de la decisión. 
 4. Los votos y el razonamiento: Pedile que realice una comparación entre los distintos votos del fallo (mayoría vs. disidencias) y que identifique posibles problemas de razonamiento lógico. 
 5. Vínculos jurisprudenciales: Fomentá que el alumno establezca vínculos entre el "holding" del fallo en análisis y los de otros fallos estudiados previamente. 
@@ -964,32 +964,46 @@ app.post("/api/chat", async (req, res) => {
       systemInstruction: fullSystemPrompt
     });
 
-    let formattedHistory = history.map((h: any) => ({
-      role: (h.role === 'model' || h.role === 'ai') ? 'model' : 'user',
-      parts: [{ text: h.text }]
-    }));
-
-    // Gemini API requires the first message to be from 'user'.
-    if (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
-      formattedHistory.unshift({ role: 'user', parts: [{ text: "Hola profesor, estoy listo para iniciar el análisis del caso." }] });
-    }
-
     let aiResponse = "";
     if (!history || history.length <= 1) {
       aiResponse = `Hola ${studentName}, me alegra que estés listo/a para comenzar.\nPara iniciar nuestro análisis del caso ${caseTitleForIntro}, te propongo que identifiquemos primero los hechos principales. ¿Podrías decirme, con tus propias palabras, qué fue lo que ocurrió en este caso?`;
     } else {
       try {
+        let formattedHistory: any[] = [];
+        let currentRole = "";
+        
+        // Flatten and squash history to strictly alternate roles
+        const rawHistory = [...history.map((h: any) => ({ role: (h.role === 'model' || h.role === 'ai') ? 'model' : 'user', text: h.text })), { role: 'user', text: message }];
+        
+        for (const msg of rawHistory) {
+          if (msg.role !== currentRole) {
+            formattedHistory.push({ role: msg.role, parts: [{ text: msg.text }] });
+            currentRole = msg.role;
+          } else {
+            // Append to the last message of the same role
+            formattedHistory[formattedHistory.length - 1].parts[0].text += "\n\n" + msg.text;
+          }
+        }
+
+        // Gemini API requires the first message to be from 'user'.
+        if (formattedHistory.length > 0 && formattedHistory[0].role === 'model') {
+          formattedHistory.unshift({ role: 'user', parts: [{ text: "Hola profesor, estoy listo para iniciar el análisis del caso." }] });
+        }
+
+        // The very last item is the current user message, we must pop it and use it as the main input to avoid duplicate
+        const lastUserMessage = formattedHistory.pop();
+
         const result = await model.generateContent({
           generationConfig: { temperature: 0.2 },
           contents: [
             ...formattedHistory,
-            { role: 'user', parts: [{ text: message }] }
+            lastUserMessage
           ]
         });
         aiResponse = result.response.text();
       } catch (apiError) {
         console.error("Gemini Content Generation Error:", apiError);
-        aiResponse = "No puedo darte esa respuesta de forma directa, ya que mi objetivo es guiar tu propio razonamiento socrático. Sin embargo, analicemos juntos este punto: ¿Qué principios o derechos constitucionales crees que se están debatiendo aquí y cómo los conectarías con los hechos del caso?";
+        aiResponse = "Tuve un inconveniente técnico al procesar tu respuesta. ¿Podrías intentar enviarla de nuevo de forma más breve?";
       }
     }
 
