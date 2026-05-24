@@ -4,424 +4,19 @@ import { GoogleGenerativeAI } from "@google/generative-ai";
 import dotenv from "dotenv";
 import multer from "multer";
 import pdf from "pdf-parse";
-import fs from "fs";
-import admin from "firebase-admin";
+import { createClient } from "@supabase/supabase-js";
 
 dotenv.config();
 
-// Global indicators for DB state
-let realDb: any = null;
-let useLocalDb = false;
+const supabaseUrl = process.env.SUPABASE_URL;
+const supabaseKey = process.env.SUPABASE_SERVICE_KEY;
 
-// Initialize Firebase Admin safely
-try {
-  let serviceAccount: any = null;
-  if (process.env.FIREBASE_SERVICE_ACCOUNT) {
-    serviceAccount = JSON.parse(process.env.FIREBASE_SERVICE_ACCOUNT);
-  } else {
-    const serviceAccountPath = path.join(process.cwd(), "firebase-service-account.json");
-    if (fs.existsSync(serviceAccountPath)) {
-      serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, "utf-8"));
-    }
-  }
-
-  if (serviceAccount) {
-    if (!admin.apps.length) {
-      admin.initializeApp({
-        credential: admin.credential.cert(serviceAccount)
-      });
-    }
-    realDb = admin.firestore(admin.app(), "nueva-base");
-    console.log("[Firebase] Successfully initialized with service account.");
-  } else {
-    console.warn("[Firebase Warning] No FIREBASE_SERVICE_ACCOUNT env var or firebase-service-account.json file found. Falling back to Local JSON database.");
-    useLocalDb = true;
-  }
-} catch (error: any) {
-  console.error("[Firebase Error] Initialization failed, falling back to Local JSON database:", error.message);
-  useLocalDb = true;
+if (!supabaseUrl || !supabaseKey) {
+  console.error("Missing SUPABASE_URL or SUPABASE_SERVICE_KEY");
+  process.exit(1);
 }
 
-class MockDocRef {
-  id: string;
-  collectionName: string;
-  subcollectionName?: string;
-  parentCaseId?: string;
-
-  constructor(id: string, collectionName: string, subcollectionName?: string, parentCaseId?: string) {
-    this.id = id;
-    this.collectionName = collectionName;
-    this.subcollectionName = subcollectionName;
-    this.parentCaseId = parentCaseId;
-  }
-
-  async get() {
-    const data = localDb.getDoc(this.collectionName, this.id, this.subcollectionName, this.parentCaseId);
-    return {
-      exists: data !== undefined,
-      data: () => data,
-      id: this.id
-    };
-  }
-
-  async set(data: any, options?: any) {
-    if (options && options.merge) {
-      localDb.updateDoc(this.collectionName, this.id, data, this.subcollectionName, this.parentCaseId);
-    } else {
-      localDb.setDoc(this.collectionName, this.id, data, this.subcollectionName, this.parentCaseId);
-    }
-  }
-
-  async update(data: any) {
-    localDb.updateDoc(this.collectionName, this.id, data, this.subcollectionName, this.parentCaseId);
-  }
-
-  async delete() {
-    localDb.deleteDoc(this.collectionName, this.id, this.subcollectionName, this.parentCaseId);
-  }
-
-  collection(name: string) {
-    return new MockCollectionRef(this.collectionName, name, this.id);
-  }
-}
-
-class MockCollectionRef {
-  name: string;
-  subcollectionName?: string;
-  parentCaseId?: string;
-  orderField?: string;
-  orderDirection?: string;
-  limitVal?: number;
-
-  constructor(name: string, subcollectionName?: string, parentCaseId?: string) {
-    this.name = name;
-    this.subcollectionName = subcollectionName;
-    this.parentCaseId = parentCaseId;
-  }
-
-  doc(id: string) {
-    return new MockDocRef(id, this.name, this.subcollectionName, this.parentCaseId);
-  }
-
-  async add(data: any) {
-    const id = Math.random().toString(36).substring(2, 15);
-    localDb.setDoc(this.name, id, data, this.subcollectionName, this.parentCaseId);
-    return { id };
-  }
-
-  orderBy(field: string, direction: string = 'asc') {
-    this.orderField = field;
-    this.orderDirection = direction;
-    return this;
-  }
-
-  limit(val: number) {
-    this.limitVal = val;
-    return this;
-  }
-
-  async get() {
-    let docsData = localDb.getCollection(this.name, this.subcollectionName, this.parentCaseId);
-    let docs = Object.keys(docsData).map(id => {
-      const data = docsData[id];
-      return {
-        id,
-        exists: true,
-        data: () => data,
-        ref: {
-          id,
-          collectionName: this.name,
-          subcollectionName: this.subcollectionName,
-          parentCaseId: this.parentCaseId
-        }
-      };
-    });
-    if (this.orderField) {
-      docs.sort((a, b) => {
-        const valA = a.data()[this.orderField!];
-        const valB = b.data()[this.orderField!];
-        if (valA < valB) return this.orderDirection === 'desc' ? 1 : -1;
-        if (valA > valB) return this.orderDirection === 'desc' ? -1 : 1;
-        return 0;
-      });
-    }
-    if (this.limitVal !== undefined) {
-      docs = docs.slice(0, this.limitVal);
-    }
-    return {
-      size: docs.length,
-      docs,
-      forEach(callback: (doc: any) => void) {
-        docs.forEach(callback);
-      }
-    };
-  }
-}
-
-class LocalDatabase {
-  data: any = {
-    students: {},
-    cases: {},
-    global_docs: {},
-    activity_log: {},
-    session_controls: {}
-  };
-
-  constructor() {
-    this.loadFromDisk();
-    if (!this.data.students) this.data.students = {};
-    if (!this.data.cases) this.data.cases = {};
-    this.saveToDisk();
-  }
-
-  loadFromDisk() {
-    try {
-      if (fs.existsSync("./local_db.json")) {
-        this.data = JSON.parse(fs.readFileSync("./local_db.json", "utf-8"));
-      }
-    } catch (e) {
-      console.error("Failed to load local_db.json", e);
-    }
-  }
-
-  saveToDisk() {
-    try {
-      fs.writeFileSync("./local_db.json", JSON.stringify(this.data, null, 2), "utf-8");
-    } catch (e) {
-      console.error("Failed to save local_db.json", e);
-    }
-  }
-
-  getCollection(name: string, subcollectionName?: string, parentCaseId?: string) {
-    if (subcollectionName && parentCaseId) {
-      const parentDoc = this.data[name]?.[parentCaseId];
-      if (!parentDoc) return {};
-      if (!parentDoc._subcollections) parentDoc._subcollections = {};
-      if (!parentDoc._subcollections[subcollectionName]) parentDoc._subcollections[subcollectionName] = {};
-      return parentDoc._subcollections[subcollectionName];
-    }
-    if (!this.data[name]) this.data[name] = {};
-    return this.data[name];
-  }
-
-  getDoc(name: string, id: string, subcollectionName?: string, parentCaseId?: string) {
-    const col = this.getCollection(name, subcollectionName, parentCaseId);
-    return col[id];
-  }
-
-  sanitizeData(data: any) {
-    if (!data) return data;
-    const copy = { ...data };
-    for (const k in copy) {
-      if (copy[k] && typeof copy[k] === 'object') {
-        if (k === 'timestamp' || k === 'lastActive' || k === 'addedAt' || k === 'createdAt') {
-          copy[k] = new Date().toISOString();
-        }
-      }
-    }
-    return copy;
-  }
-
-  setDoc(name: string, id: string, data: any, subcollectionName?: string, parentCaseId?: string) {
-    const col = this.getCollection(name, subcollectionName, parentCaseId);
-    col[id] = this.sanitizeData(data);
-    this.saveToDisk();
-  }
-
-  updateDoc(name: string, id: string, data: any, subcollectionName?: string, parentCaseId?: string) {
-    const col = this.getCollection(name, subcollectionName, parentCaseId);
-    if (!col[id]) col[id] = {};
-    col[id] = { ...col[id], ...this.sanitizeData(data) };
-    this.saveToDisk();
-  }
-
-  deleteDoc(name: string, id: string, subcollectionName?: string, parentCaseId?: string) {
-    const col = this.getCollection(name, subcollectionName, parentCaseId);
-    delete col[id];
-    this.saveToDisk();
-  }
-}
-
-const localDb = new LocalDatabase();
-// useLocalDb is declared at the top of the file
-
-const db = {
-  collection(name: string) {
-    if (useLocalDb) {
-      return new MockCollectionRef(name);
-    }
-    try {
-      const realCol = realDb.collection(name);
-      return {
-        doc(id: string) {
-          const realDoc = realCol.doc(id);
-          return {
-            async get() {
-              try {
-                return await realDoc.get();
-              } catch (e: any) {
-                console.warn("[Firebase Warn] get doc failed, switching to local DB:", e.message);
-                useLocalDb = true;
-                return await new MockDocRef(id, name).get();
-              }
-            },
-            async set(data: any, options?: any) {
-              try {
-                return await realDoc.set(data, options);
-              } catch (e: any) {
-                console.warn("[Firebase Warn] set doc failed, switching to local DB:", e.message);
-                useLocalDb = true;
-                return await new MockDocRef(id, name).set(data, options);
-              }
-            },
-            async update(data: any) {
-              try {
-                return await realDoc.update(data);
-              } catch (e: any) {
-                console.warn("[Firebase Warn] update doc failed, switching to local DB:", e.message);
-                useLocalDb = true;
-                return await new MockDocRef(id, name).update(data);
-              }
-            },
-            async delete() {
-              try {
-                return await realDoc.delete();
-              } catch (e: any) {
-                console.warn("[Firebase Warn] delete doc failed, switching to local DB:", e.message);
-                useLocalDb = true;
-                return await new MockDocRef(id, name).delete();
-              }
-            },
-            collection(subname: string) {
-              return {
-                doc(subid: string) {
-                  return {
-                    async set(data: any, options?: any) {
-                      try {
-                        return await realDoc.collection(subname).doc(subid).set(data, options);
-                      } catch (e: any) {
-                        useLocalDb = true;
-                        return await new MockDocRef(subid, name, subname, id).set(data, options);
-                      }
-                    }
-                  }
-                },
-                async add(data: any) {
-                  try {
-                    return await realDoc.collection(subname).add(data);
-                  } catch (e: any) {
-                    useLocalDb = true;
-                    return await new MockCollectionRef(name, subname, id).add(data);
-                  }
-                },
-                async get() {
-                  try {
-                    return await realDoc.collection(subname).get();
-                  } catch (e: any) {
-                    useLocalDb = true;
-                    return await new MockCollectionRef(name, subname, id).get();
-                  }
-                }
-              }
-            }
-          };
-        },
-        async add(data: any) {
-          try {
-            return await realCol.add(data);
-          } catch (e: any) {
-            console.warn("[Firebase Warn] add doc failed, switching to local DB:", e.message);
-            useLocalDb = true;
-            return await new MockCollectionRef(name).add(data);
-          }
-        },
-        orderBy(field: string, direction: string = 'asc') {
-          const orderedCol = realCol.orderBy(field, direction as admin.firestore.OrderByDirection);
-          return {
-            limit(val: number) {
-              const limitedCol = orderedCol.limit(val);
-              return {
-                async get() {
-                  try {
-                    return await limitedCol.get();
-                  } catch (e: any) {
-                    useLocalDb = true;
-                    return await new MockCollectionRef(name).orderBy(field, direction).limit(val).get();
-                  }
-                }
-              };
-            },
-            async get() {
-              try {
-                return await orderedCol.get();
-              } catch (e: any) {
-                useLocalDb = true;
-                return await new MockCollectionRef(name).orderBy(field, direction).get();
-              }
-            }
-          };
-        },
-        async get() {
-          try {
-            return await realCol.get();
-          } catch (e: any) {
-            console.warn("[Firebase Warn] get collection failed, switching to local DB:", e.message);
-            useLocalDb = true;
-            return await new MockCollectionRef(name).get();
-          }
-        }
-      };
-    } catch (e: any) {
-      useLocalDb = true;
-      return new MockCollectionRef(name);
-    }
-  },
-  batch() {
-    if (useLocalDb) {
-      return {
-        delete(ref: any) {
-          localDb.deleteDoc(ref.collectionName, ref.id, ref.subcollectionName, ref.parentCaseId);
-        },
-        async commit() {}
-      };
-    }
-    try {
-      const realBatch = realDb.batch();
-      const operations: any[] = [];
-      return {
-        delete(ref: any) {
-          operations.push({ type: 'delete', ref });
-          try {
-            realBatch.delete(ref);
-          } catch (e) {
-            // Ignore
-          }
-        },
-        async commit() {
-          try {
-            await realBatch.commit();
-          } catch (e: any) {
-            console.warn("[Firebase Warn] batch commit failed, switching to local DB:", e.message);
-            useLocalDb = true;
-            for (const op of operations) {
-              if (op.type === 'delete') {
-                localDb.deleteDoc(op.ref.collectionName || 'cases', op.ref.id);
-              }
-            }
-          }
-        }
-      };
-    } catch (e: any) {
-      useLocalDb = true;
-      return {
-        delete(ref: any) {
-          localDb.deleteDoc(ref.collectionName, ref.id, ref.subcollectionName, ref.parentCaseId);
-        },
-        async commit() {}
-      };
-    }
-  }
-};
+export const supabase = createClient(supabaseUrl, supabaseKey);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -434,11 +29,6 @@ const upload = multer({ storage: multer.memoryStorage() });
 // Initialize Gemini
 const ai = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || "");
 
-interface Chunk {
-  text: string;
-  embedding: number[];
-}
-
 // RAG Utilities
 function chunkText(text: string, chunkSize: number = 1500, overlap: number = 300) {
   const chunks = [];
@@ -448,19 +38,6 @@ function chunkText(text: string, chunkSize: number = 1500, overlap: number = 300
     i += chunkSize - overlap;
   }
   return chunks;
-}
-
-function cosineSimilarity(vecA: number[], vecB: number[]) {
-  let dotProduct = 0;
-  let normA = 0;
-  let normB = 0;
-  for (let i = 0; i < vecA.length; i++) {
-    dotProduct += vecA[i] * vecB[i];
-    normA += vecA[i] * vecA[i];
-    normB += vecB[i] * vecB[i];
-  }
-  if (normA === 0 || normB === 0) return 0;
-  return dotProduct / (Math.sqrt(normA) * Math.sqrt(normB));
 }
 
 async function getEmbedding(text: string) {
@@ -485,9 +62,9 @@ async function getEmbedding(text: string) {
 // 1. Get all cases
 app.get("/api/cases", async (req, res) => {
   try {
-    const snapshot = await db.collection("cases").get();
-    const cases = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json(cases);
+    const { data, error } = await supabase.from("cases").select("*");
+    if (error) throw error;
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: "Error fetching cases" });
   }
@@ -512,30 +89,26 @@ app.post("/api/admin/upload-case", upload.single("file"), async (req, res) => {
     }
 
     // Save case metadata
-    await db.collection("cases").doc(caseId).set({
-      title, year, tag, description,
-      addedAt: admin.firestore.FieldValue.serverTimestamp()
+    const { error: insertError } = await supabase.from("cases").upsert({
+      id: caseId, title, year, tag, description
     });
+    if (insertError) throw insertError;
 
     // RAG vectorization
     const textChunks = chunkText(text);
     console.log(`Generating embeddings for ${textChunks.length} chunks of case ${caseId}...`);
     
-    // We save chunks in a subcollection to not exceed document size limits
-    const chunksRef = db.collection("cases").doc(caseId).collection("chunks");
     // Clear old chunks if replacing
-    const oldChunks = await chunksRef.get();
-    const batch = db.batch();
-    oldChunks.docs.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
+    await supabase.from("case_chunks").delete().eq("case_id", caseId);
 
     for (let i = 0; i < textChunks.length; i++) {
       const chunkTextData = textChunks[i];
       const embedding = await getEmbedding(chunkTextData);
       if (embedding.length > 0) {
-        await chunksRef.add({
+        await supabase.from("case_chunks").insert({
+          case_id: caseId,
           text: chunkTextData,
-          embedding,
+          embedding: `[${embedding.join(',')}]`,
           index: i
         });
       }
@@ -570,28 +143,25 @@ app.post("/api/admin/upload-doc", upload.single("file"), async (req, res) => {
     const docId = title.toLowerCase().replace(/\s+/g, '_');
 
     // Save doc metadata
-    await db.collection("global_docs").doc(docId).set({
-      title, category,
-      addedAt: admin.firestore.FieldValue.serverTimestamp()
+    const { error: insertError } = await supabase.from("global_docs").upsert({
+      id: docId, title, type: category
     });
+    if (insertError) throw insertError;
 
     // RAG vectorization
     const textChunks = chunkText(text);
     console.log(`Generating embeddings for ${textChunks.length} chunks of global doc ${docId}...`);
     
-    const chunksRef = db.collection("global_docs").doc(docId).collection("chunks");
-    const oldChunks = await chunksRef.get();
-    const batch = db.batch();
-    oldChunks.docs.forEach(doc => batch.delete(doc.ref));
-    await batch.commit();
+    await supabase.from("global_doc_chunks").delete().eq("doc_id", docId);
 
     for (let i = 0; i < textChunks.length; i++) {
       const chunkTextData = textChunks[i];
       const embedding = await getEmbedding(chunkTextData);
       if (embedding.length > 0) {
-        await chunksRef.add({
+        await supabase.from("global_doc_chunks").insert({
+          doc_id: docId,
           text: chunkTextData,
-          embedding,
+          embedding: `[${embedding.join(',')}]`,
           index: i
         });
       }
@@ -606,9 +176,9 @@ app.post("/api/admin/upload-doc", upload.single("file"), async (req, res) => {
 
 app.get("/api/admin/docs", async (req, res) => {
   try {
-    const snapshot = await db.collection("global_docs").get();
-    const docs = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json(docs);
+    const { data, error } = await supabase.from("global_docs").select("*");
+    if (error) throw error;
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: "Error fetching global docs" });
   }
@@ -619,11 +189,12 @@ app.post("/api/admin/students", async (req, res) => {
   const { name, legajo, email } = req.body;
   console.log("POST /api/admin/students called with:", { name, legajo, email });
   try {
-    const docRef = await db.collection("students").add({
-      name, legajo, email, progress: 0, lastActive: admin.firestore.FieldValue.serverTimestamp()
-    });
-    console.log("POST /api/admin/students success. Firestore ID generated:", docRef.id);
-    res.json({ status: "ok", id: docRef.id });
+    const { data, error } = await supabase.from("students").insert({
+      name, legajo, email, status: 'active', lastActive: new Date().toISOString()
+    }).select().single();
+    if (error) throw error;
+    console.log("POST /api/admin/students success. ID generated:", data.id);
+    res.json({ status: "ok", id: data.id });
   } catch (error) {
     console.error("Error adding student:", error);
     res.status(500).json({ error: "Error adding student" });
@@ -632,9 +203,9 @@ app.post("/api/admin/students", async (req, res) => {
 
 app.get("/api/admin/students", async (req, res) => {
   try {
-    const snapshot = await db.collection("students").get();
-    const students = snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-    res.json(students);
+    const { data, error } = await supabase.from("students").select("*");
+    if (error) throw error;
+    res.json(data);
   } catch (error) {
     res.status(500).json({ error: "Error fetching students" });
   }
@@ -644,33 +215,13 @@ app.delete("/api/admin/students/:id", async (req, res) => {
   const studentId = req.params.id;
   console.log("DELETE /api/admin/students/:id called with ID:", studentId);
   try {
-    // 1. Try deleting directly by document ID first if it exists
-    const docRef = db.collection("students").doc(studentId);
-    const docSnap = await docRef.get();
-    if (docSnap.exists) {
-      console.log(`Student found by Document ID '${studentId}'. Deleting doc...`);
-      await docRef.delete();
-      return res.json({ status: "ok" });
-    }
-
-    // 2. If not found by ID (e.g. if it was a temporary ID or legajo passed), search by legajo or name
-    const snapshot = await db.collection("students").get();
-    const docToClose = snapshot.docs.find(doc => {
-      const data = doc.data();
-      return doc.id === studentId ||
-             (data.legajo && data.legajo.toString().trim() === studentId.trim()) ||
-             (data.name && data.name.toString().trim() === studentId.trim());
-    });
-
+    const { data } = await supabase.from("students").select("id, name, legajo");
+    const docToClose = data?.find(doc => doc.id === studentId || doc.legajo === studentId || doc.name === studentId);
     if (docToClose) {
-      console.log(`Student found by searching properties. Document ID: '${docToClose.id}'. Deleting...`);
-      await db.collection("students").doc(docToClose.id).delete();
-      return res.json({ status: "ok" });
+      await supabase.from("students").delete().eq("id", docToClose.id);
+    } else {
+      await supabase.from("students").delete().eq("id", studentId);
     }
-
-    // 3. Fallback: just call delete on the ID to be safe
-    console.log(`Fallback: student '${studentId}' not found by searching properties. Calling delete directly on ID...`);
-    await db.collection("students").doc(studentId).delete();
     res.json({ status: "ok" });
   } catch (error) {
     console.error("Error deleting student:", error);
@@ -681,14 +232,14 @@ app.delete("/api/admin/students/:id", async (req, res) => {
 // 5. Stats
 app.get("/api/admin/stats", async (req, res) => {
   try {
-    const studentsSnap = await db.collection("students").get();
-    const casesSnap = await db.collection("cases").get();
-    const activitySnap = await db.collection("activity_log").get();
+    const { count: studentsCount } = await supabase.from("students").select('*', { count: 'exact', head: true });
+    const { count: casesCount } = await supabase.from("cases").select('*', { count: 'exact', head: true });
+    const { count: activityCount } = await supabase.from("activity_log").select('*', { count: 'exact', head: true });
 
     const stats = {
-      totalStudents: studentsSnap.size,
-      totalCases: casesSnap.size,
-      totalInteractions: activitySnap.size,
+      totalStudents: studentsCount || 0,
+      totalCases: casesCount || 0,
+      totalInteractions: activityCount || 0,
       activeNow: Math.floor(Math.random() * 5) + 1 // Simulated for now
     };
     res.json(stats);
@@ -703,20 +254,18 @@ app.post("/api/login", async (req, res) => {
   if (!name || !legajo) return res.status(400).json({ error: "Missing name or legajo" });
   
   try {
-    const snapshot = await db.collection("students").get();
+    const { data } = await supabase.from("students").select("*");
     
-    const studentDoc = snapshot.docs.find(doc => {
-      const data = doc.data();
-      return data.name?.trim().toLowerCase() === name.trim().toLowerCase() && 
-             data.legajo?.trim().toLowerCase() === legajo.trim().toLowerCase();
+    const studentDoc = data?.find(doc => {
+      return doc.name?.trim().toLowerCase() === name.trim().toLowerCase() && 
+             doc.legajo?.trim().toLowerCase() === legajo.trim().toLowerCase();
     });
       
     if (!studentDoc) {
       return res.status(401).json({ error: "Invalid credentials" });
     }
     
-    const student = studentDoc.data();
-    res.json({ status: "ok", name: student.name, legajo: student.legajo });
+    res.json({ status: "ok", name: studentDoc.name, legajo: studentDoc.legajo });
   } catch (err) {
     res.status(500).json({ error: "Login failed" });
   }
@@ -726,9 +275,9 @@ app.post("/api/login", async (req, res) => {
 app.get("/api/cases/:id", async (req, res) => {
   const caseId = req.params.id;
   try {
-    const doc = await db.collection("cases").doc(caseId).get();
-    if (doc.exists) {
-      res.json({ id: doc.id, ...doc.data() });
+    const { data } = await supabase.from("cases").select("*").eq("id", caseId).single();
+    if (data) {
+      res.json(data);
     } else {
       res.status(404).json({ error: "Case not found" });
     }
@@ -741,15 +290,8 @@ app.get("/api/cases/:id", async (req, res) => {
 app.delete("/api/cases/:id", async (req, res) => {
   const caseId = req.params.id;
   try {
-    await db.collection("cases").doc(caseId).delete();
-    // Delete chunks (optional cleanup)
-    const chunksRef = db.collection("cases").doc(caseId).collection("chunks");
-    const chunks = await chunksRef.get();
-    if (!chunks.empty) {
-      const batch = db.batch();
-      chunks.docs.forEach(doc => batch.delete(doc.ref));
-      await batch.commit();
-    }
+    await supabase.from("cases").delete().eq("id", caseId);
+    // cascade delete handles chunks
     res.json({ status: "ok" });
   } catch (error) {
     res.status(500).json({ error: "Error deleting case" });
@@ -836,15 +378,16 @@ INFORMACIÓN DEL CASO Y DOCUMENTACIÓN:
 app.post("/api/admin/interact", async (req, res) => {
   const { action, userName, caseId, message } = req.body;
   try {
-    const docRef = db.collection("session_controls").doc(`${userName}_${caseId}`);
+    const id = `${userName}_${caseId}`;
     if (action === "interrupt") {
-      await docRef.set({ isInterrupted: true }, { merge: true });
+      await supabase.from("session_controls").upsert({ id, isInterrupted: true });
     } else if (action === "suggest") {
-      await docRef.set({
-        teacherMessages: admin.firestore.FieldValue.arrayUnion(message)
-      }, { merge: true });
+      const { data } = await supabase.from("session_controls").select("teacherMessages").eq("id", id).single();
+      const msgs = data?.teacherMessages || [];
+      msgs.push(message);
+      await supabase.from("session_controls").upsert({ id, teacherMessages: msgs });
     } else if (action === "resume") {
-      await docRef.set({ isInterrupted: false }, { merge: true });
+      await supabase.from("session_controls").upsert({ id, isInterrupted: false });
     }
     res.json({ success: true });
   } catch (error) {
@@ -855,15 +398,14 @@ app.post("/api/admin/interact", async (req, res) => {
 app.get("/api/chat/poll", async (req, res) => {
   const { studentName, caseId } = req.query;
   try {
-    const docRef = db.collection("session_controls").doc(`${studentName}_${caseId}`);
-    const doc = await docRef.get();
-    if (doc.exists) {
-      const data = doc.data();
-      const teacherMessages = data?.teacherMessages || [];
-      const isInterrupted = data?.isInterrupted || false;
+    const id = `${studentName}_${caseId}`;
+    const { data } = await supabase.from("session_controls").select("*").eq("id", id).single();
+    if (data) {
+      const teacherMessages = data.teacherMessages || [];
+      const isInterrupted = data.isInterrupted || false;
       
       if (teacherMessages.length > 0) {
-        await docRef.update({ teacherMessages: [] });
+        await supabase.from("session_controls").update({ teacherMessages: [] }).eq("id", id);
       }
       
       res.json({ teacherMessages, isInterrupted });
@@ -880,8 +422,9 @@ app.post("/api/chat", async (req, res) => {
   const { message, caseId, history, studentName = "Estudiante Anonimo" } = req.body;
 
   try {
-    const sessionControlDoc = await db.collection("session_controls").doc(`${studentName}_${caseId}`).get();
-    if (sessionControlDoc.exists && sessionControlDoc.data()?.isInterrupted) {
+    const id = `${studentName}_${caseId}`;
+    const { data: sessionData } = await supabase.from("session_controls").select("*").eq("id", id).single();
+    if (sessionData?.isInterrupted) {
       return res.json({ text: "👨‍🏫 **Aviso del Profesor:** Tu sesión en este caso ha sido pausada temporalmente. Por favor, aguarda nuevas indicaciones o sugerencias." });
     }
 
@@ -891,29 +434,27 @@ app.post("/api/chat", async (req, res) => {
     let allRelevantChunks: {text: string, score: number}[] = [];
 
     if (queryEmbedding.length > 0) {
-      // Search in Case
+      const queryStr = `[${queryEmbedding.join(',')}]`;
+      
       if (caseId) {
-        const caseChunksSnap = await db.collection("cases").doc(caseId).collection("chunks").get();
-        caseChunksSnap.forEach(doc => {
-          const c = doc.data();
-          allRelevantChunks.push({
-            text: c.text,
-            score: cosineSimilarity(queryEmbedding, c.embedding)
-          });
+        const { data: caseMatches } = await supabase.rpc('match_case_chunks', {
+          query_embedding: queryStr,
+          match_threshold: 0.0,
+          match_count: 6,
+          p_case_id: caseId
         });
+        if (caseMatches) {
+          caseMatches.forEach((m: any) => allRelevantChunks.push({ text: m.text, score: m.similarity }));
+        }
       }
       
-      // Search in Global Docs
-      const globalDocsSnap = await db.collection("global_docs").get();
-      for (const gDoc of globalDocsSnap.docs) {
-        const gChunksSnap = await db.collection("global_docs").doc(gDoc.id).collection("chunks").get();
-        gChunksSnap.forEach(doc => {
-          const c = doc.data();
-          allRelevantChunks.push({
-            text: c.text,
-            score: cosineSimilarity(queryEmbedding, c.embedding)
-          });
-        });
+      const { data: globalMatches } = await supabase.rpc('match_global_chunks', {
+        query_embedding: queryStr,
+        match_threshold: 0.0,
+        match_count: 6
+      });
+      if (globalMatches) {
+        globalMatches.forEach((m: any) => allRelevantChunks.push({ text: m.text, score: m.similarity }));
       }
     }
 
@@ -935,9 +476,8 @@ app.post("/api/chat", async (req, res) => {
 - Decisión de la Corte Suprema: Declaró la inconstitucionalidad de la restricción de nacionalidad para dicho cargo. La Corte consideró que la nacionalidad es una "categoría sospechosa" y que toda distinción basada en el origen nacional goza de presunción de inconstitucionalidad, requiriendo un escrutinio estricto. Al no tratarse de un cargo que implique el ejercicio de la soberanía política o de funciones jurisdiccionales exclusivas de los jueces, restringir el acceso a extranjeros idóneos carece de una justificación estatal imperiosa y resulta irrazonable (Art. 28 CN).`;
     } else if (caseId) {
       try {
-        const caseDoc = await db.collection("cases").doc(caseId).get();
-        if (caseDoc.exists) {
-          const caseData = caseDoc.data();
+        const { data: caseData } = await supabase.from("cases").select("*").eq("id", caseId).single();
+        if (caseData) {
           contextData = `INFORMACIÓN DEL CASO DE ESTUDIO DE LA CÁTEDRA:
 - Fallo: ${caseData.title || caseId} (${caseData.year || "S/F"}).
 - Temática: ${caseData.tag || "Derecho Constitucional"}.
@@ -1014,11 +554,10 @@ app.post("/api/chat", async (req, res) => {
     aiResponse = aiResponse.trim();
     aiResponse = aiResponse + "\n\n" + warningMsg;
 
-    // Log Activity in Firestore
-    await db.collection("activity_log").add({
+    // Log Activity in Supabase
+    await supabase.from("activity_log").insert({
       userName: studentName,
       caseTitle: caseId,
-      timestamp: admin.firestore.FieldValue.serverTimestamp(),
       messages: [
         { role: 'user', text: message },
         { role: 'ai', text: aiResponse }
@@ -1035,22 +574,12 @@ app.post("/api/chat", async (req, res) => {
 // Endpoint for Teacher Panel to get live activity
 app.get("/api/admin/activity", async (req, res) => {
   try {
-    const snapshot = await db.collection("activity_log")
-      .orderBy("timestamp", "desc")
-      .limit(50)
-      .get();
+    const { data, error } = await supabase.from("activity_log")
+      .select("*")
+      .order("timestamp", { ascending: false })
+      .limit(50);
     
-    const activity = snapshot.docs.map(doc => {
-      const data = doc.data();
-      return {
-        id: doc.id,
-        ...data,
-        timestamp: data.timestamp 
-          ? (typeof data.timestamp.toDate === 'function' ? data.timestamp.toDate() : new Date(data.timestamp)) 
-          : new Date()
-      }
-    });
-    res.json(activity);
+    res.json(data || []);
   } catch (error) {
     res.status(500).json({ error: "Error fetching activity" });
   }
