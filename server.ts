@@ -42,12 +42,12 @@ function chunkText(text: string, chunkSize: number = 1500, overlap: number = 300
 
 async function getEmbedding(text: string) {
   try {
-    const embeddingModel = ai.getGenerativeModel({ model: "text-embedding-004" });
+    const embeddingModel = ai.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
     const result = await embeddingModel.embedContent(text);
     return result.embedding.values;
   } catch(e) {
     try {
-      const embeddingModelBackup = ai.getGenerativeModel({ model: "text-embedding-004" });
+      const embeddingModelBackup = ai.getGenerativeModel({ model: "text-embedding-004" }, { apiVersion: 'v1' });
       const result = await embeddingModelBackup.embedContent(text);
       return result.embedding.values;
     } catch (e2) {
